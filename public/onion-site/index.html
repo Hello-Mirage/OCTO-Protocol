@@ -65,14 +65,18 @@
 
         function addBubble(text, from, timestamp) {
             const div = document.createElement('div');
-            div.className = `chat-bubble chat-bubble--${from}`;
+            div.className = 'chat-line';
             
             const time = timestamp 
                 ? new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                 : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-            const label = from === 'self' ? 'You' : 'Peer';
-            div.innerHTML = `${escapeHtml(text)}<div class="chat-bubble__time">${label} · ${time}</div>`;
+            const name = from === 'self' ? 'You' : 'Peer';
+            
+            div.innerHTML = `
+                <span class="chat-line__meta chat-line__meta--${from}">[${time}] ${name}:</span>
+                <span class="chat-line__text">${escapeHtml(text)}</span>
+            `;
 
             messages.appendChild(div);
             messages.scrollTop = messages.scrollHeight;

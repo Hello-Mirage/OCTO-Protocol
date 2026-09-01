@@ -200,16 +200,18 @@ function sendMessage() {
 
 function addChatMessage(text, from) {
     const container = document.getElementById('chatMessages');
-    const bubble = document.createElement('div');
-    bubble.className = `chat-bubble chat-bubble--${from}`;
+    const line = document.createElement('div');
+    line.className = 'chat-line';
 
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    bubble.innerHTML = `
-        ${escapeHtml(text)}
-        <div class="chat-bubble__time">${from === 'self' ? 'You' : 'Peer'} · ${time}</div>
+    const name = from === 'self' ? 'You' : 'Peer';
+    
+    line.innerHTML = `
+        <span class="chat-line__meta chat-line__meta--${from}">[${time}] ${name}:</span>
+        <span class="chat-line__text">${escapeHtml(text)}</span>
     `;
 
-    container.appendChild(bubble);
+    container.appendChild(line);
     container.scrollTop = container.scrollHeight;
 }
 
