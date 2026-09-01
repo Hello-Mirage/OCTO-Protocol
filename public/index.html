@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OCTO Protocol — Dashboard</title>
+    <meta name="description" content="Serverless P2P encrypted chat over Tor hidden services">
+    <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+    <div class="container">
+
+        <!-- Header -->
+        <header class="header">
+            <h1 class="header__logo">OCTO Protocol</h1>
+            <p class="header__subtitle">Serverless P2P Chat over Tor</p>
+        </header>
+
+        <!-- Status -->
+        <div id="statusBar" class="status status--offline">
+            <span class="status__dot"></span>
+            <span id="statusText">Offline — Generate an identity to begin</span>
+        </div>
+
+        <!-- Identity Card -->
+        <section class="card" id="identityCard">
+            <h2 class="card__title">Identity</h2>
+
+            <!-- Generate / Restore buttons -->
+            <div id="identityActions">
+                <div class="btn-group">
+                    <button class="btn btn--primary" id="btnGenerate" onclick="generateIdentity()">
+                        ⚡ Generate New Identity
+                    </button>
+                    <button class="btn btn--secondary" id="btnRestore" onclick="showRestoreInput()">
+                        🔑 Restore
+                    </button>
+                </div>
+
+                <!-- Restore input (hidden by default) -->
+                <div id="restoreSection" class="hidden" style="margin-top: 0.75rem;">
+                    <textarea class="textarea" id="restoreInput" 
+                        placeholder="Paste your 24 words here, separated by spaces..."></textarea>
+                    <div class="btn-group">
+                        <button class="btn btn--primary" onclick="restoreIdentity()">Restore Identity</button>
+                        <button class="btn btn--secondary" onclick="hideRestoreInput()">Cancel</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Word display (hidden until generated) -->
+            <div id="wordDisplay" class="hidden">
+                <div class="word-grid" id="wordGrid"></div>
+                <div class="onion-address" id="onionDisplay" onclick="copyOnion()">
+                    <span class="onion-address__label">Your .onion Address</span>
+                    <span id="onionText"></span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Scanner Card (hidden until identity exists) -->
+        <section class="card hidden" id="scannerCard">
+            <h2 class="card__title">Scanner — Host Hidden Service</h2>
+
+            <div id="scannerActions">
+                <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
+                    Start the scanner to host your chat server as a Tor hidden service. 
+                    Others can reach you at your .onion address using Tor Browser.
+                </p>
+                <button class="btn btn--primary btn--full" id="btnStartScanner" onclick="startScanner()">
+                    🛰️ Start Scanner
+                </button>
+            </div>
+
+            <div id="scannerRunning" class="hidden">
+                <div class="progress">
+                    <div class="progress__bar" id="progressBar"></div>
+                </div>
+                <div class="log" id="scannerLog"></div>
+                <div style="margin-top: 0.75rem;">
+                    <button class="btn btn--danger btn--full" onclick="stopSession()">
+                        ■ Stop Scanner
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Chat Card (hidden until scanner is live) -->
+        <section class="card hidden" id="chatCard">
+            <h2 class="card__title">Chat — Local Console</h2>
+            <div id="chatMessages" style="max-height: 200px; overflow-y: auto; margin-bottom: 0.75rem;"></div>
+            <div style="display: flex; gap: 0.5rem;">
+                <input class="input" id="chatInput" type="text" 
+                    placeholder="Type a message..." 
+                    onkeydown="if(event.key==='Enter') sendMessage()">
+                <button class="btn btn--primary" onclick="sendMessage()">Send</button>
+            </div>
+        </section>
+
+    </div>
+
+    <!-- Copy Feedback Toast -->
+    <div class="copy-feedback" id="copyFeedback">Copied to clipboard!</div>
+
+    <script src="/js/dashboard.js"></script>
+</body>
+</html>

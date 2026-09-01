@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OCTO — Secure Chat</title>
+    <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+    <div class="chat-container">
+
+        <header class="chat-header">
+            <h1>OCTO</h1>
+            <div class="connection-status" id="connStatus">Connecting...</div>
+        </header>
+
+        <div class="chat-messages" id="messages"></div>
+
+        <div class="chat-input-area">
+            <input type="text" id="msgInput" placeholder="Type a message..." 
+                   autocomplete="off" onkeydown="if(event.key==='Enter') send()">
+            <button onclick="send()">Send</button>
+        </div>
+
+    </div>
+
+    <script>
+        const messages = document.getElementById('messages');
+        const input = document.getElementById('msgInput');
+        const connStatus = document.getElementById('connStatus');
+
+        // Connect WebSocket to the same host (the .onion address)
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${protocol}//${location.host}`);
+
+        ws.onopen = () => {
+            connStatus.textContent = 'Connected — Secure Channel Active';
+            connStatus.style.color = '#10b981';
+        };
+
+        ws.onclose = () => {
+            connStatus.textContent = 'Disconnected';
+            connStatus.style.color = '#ef4444';
+        };
+
+        ws.onmessage = (event) => {
+            const msg = JSON.parse(event.data);
+
+            if (msg.type === 'history') {
+                // Load chat history
+                msg.messages.forEach(m => addBubble(m.text, m.from === 'peer' ? 'self' : 'peer', m.timestamp));
+            } else if (msg.type === 'message') {
+                addBubble(msg.text, msg.from === 'peer' ? 'self' : 'peer', msg.timestamp);
+            }
+        };
+
+        function send() {
+            const text = input.value.trim();
+            if (!text) return;
+
+            ws.send(JSON.stringify({ type: 'message', text }));
+            addBubble(text, 'self');
+            input.value = '';
+        }
+
+        function addBubble(text, from, timestamp) {
+            const div = document.createElement('div');
+            div.className = `chat-bubble chat-bubble--${from}`;
+            
+            const time = timestamp 
+                ? new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+            const label = from === 'self' ? 'You' : 'Peer';
+            div.innerHTML = `${escapeHtml(text)}<div class="chat-bubble__time">${label} · ${time}</div>`;
+
+            messages.appendChild(div);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function escapeHtml(t) {
+            const d = document.createElement('div');
+            d.textContent = t;
+            return d.innerHTML;
+        }
+
+        input.focus();
+    </script>
+</body>
+</html>
