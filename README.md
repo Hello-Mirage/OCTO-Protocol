@@ -21,4 +21,6 @@ Open `http://localhost:3000`, generate your identity, start the scanner, and acc
 
 ## License
 
-GPL-3.0 — See [LICENSE](LICENSE)
+Copyright (c) 2026 Miraj Rahaman
+
+This project is licensed under the GPL-3.0 License — See [LICENSE](LICENSE) for details.
