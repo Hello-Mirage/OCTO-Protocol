@@ -1,77 +1,70 @@
 /**
- * OCTO Protocol — Dashboard Client Logic
+ * OCTO Protocol — Dashboard Client Logic (Electron)
  */
 
 let currentMnemonic = null;
 let currentOnion = null;
-let ws = null;
+let currentRole = 'scanner';
 
-// ─── WebSocket to backend ────────────────────────────────────
+// ─── Setup IPC Listeners ─────────────────────────────────────
 
-function connectWebSocket() {
-    ws = new WebSocket(`ws://${window.location.host}`);
+window.electronAPI.onTorBootstrap((progress) => {
+    updateProgress(progress);
+    addLog(`Bootstrapping Tor... ${progress}%`, 'info');
+});
 
-    ws.onmessage = (event) => {
-        const msg = JSON.parse(event.data);
-        handleServerMessage(msg);
-    };
+window.electronAPI.onScannerReady((data) => {
+    setStatus('online', `Scanner live — ${data.onionAddress}`);
+    addLog('✓ Hidden service is online!', 'success');
+    document.getElementById('chatCard').classList.remove('hidden');
+    updateProgress(100);
+});
 
-    ws.onclose = () => {
-        // Reconnect after 2 seconds
-        setTimeout(connectWebSocket, 2000);
-    };
-}
+window.electronAPI.onBeaconReady((data) => {
+    setStatus('online', `Tor Client Ready`);
+    addLog('✓ Tor SOCKS proxy is online! Connecting to peer...', 'success');
+    document.getElementById('chatCard').classList.remove('hidden');
+    updateProgress(100);
+});
 
-function handleServerMessage(msg) {
-    switch (msg.type) {
-        case 'tor-bootstrap':
-            updateProgress(msg.progress);
-            addLog(`Bootstrapping Tor... ${msg.progress}%`, 'info');
-            break;
+window.electronAPI.onScannerError((error) => {
+    setStatus('offline', `Error: ${error}`);
+    addLog(`✗ ${error}`, 'error');
+});
 
-        case 'scanner-ready':
-            setStatus('online', `Scanner live — ${msg.onionAddress}`);
-            addLog('✓ Hidden service is online!', 'success');
-            addLog(`Address: ${msg.onionAddress}`, 'info');
-            document.getElementById('chatCard').classList.remove('hidden');
-            updateProgress(100);
-            break;
+window.electronAPI.onBeaconError((error) => {
+    setStatus('offline', `Error: ${error}`);
+    addLog(`✗ ${error}`, 'error');
+});
 
-        case 'scanner-error':
-            setStatus('offline', `Error: ${msg.error}`);
-            addLog(`✗ ${msg.error}`, 'error');
-            break;
+window.electronAPI.onPeerConnected((count) => {
+    addLog(`Peer connected (${count} total)`, 'success');
+});
 
-        case 'peer-connected':
-            addLog(`Peer connected (${msg.count} total)`, 'success');
-            break;
+window.electronAPI.onPeerDisconnected((count) => {
+    addLog(`Peer disconnected (${count} remaining)`, 'info');
+});
 
-        case 'peer-disconnected':
-            addLog(`Peer disconnected (${msg.count} remaining)`, 'info');
-            break;
+window.electronAPI.onChatMessage((msg) => {
+    addChatMessage(msg.text, msg.from);
+});
 
-        case 'chat-message':
-            addChatMessage(msg.text, 'peer');
-            break;
-    }
-}
+window.electronAPI.onChatHistory((msgs) => {
+    const container = document.getElementById('chatMessages');
+    container.innerHTML = '';
+    msgs.forEach(msg => addChatMessage(msg.text, msg.from));
+});
 
 // ─── Identity ────────────────────────────────────────────────
 
 async function generateIdentity() {
-    try {
-        const res = await fetch('/api/generate', { method: 'POST' });
-        const data = await res.json();
-
-        if (data.success) {
-            currentMnemonic = data.mnemonic;
-            currentOnion = data.onionAddress;
-            displayIdentity(data.words, data.onionAddress);
-        } else {
-            alert('Error: ' + data.error);
-        }
-    } catch (err) {
-        alert('Failed to generate identity: ' + err.message);
+    const res = await window.electronAPI.generateIdentity();
+    if (res.success) {
+        currentMnemonic = res.mnemonic;
+        currentOnion = res.onionAddress;
+        displayIdentity(res.words, res.onionAddress);
+    } else {
+        alert('Error: ' + res.error);
     }
 }
 
@@ -93,29 +86,18 @@ async function restoreIdentity() {
         return;
     }
 
-    try {
-        const res = await fetch('/api/restore', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ mnemonic: words.join(' ') })
-        });
-        const data = await res.json();
-
-        if (data.success) {
-            currentMnemonic = data.mnemonic;
-            currentOnion = data.onionAddress;
-            displayIdentity(data.words, data.onionAddress);
-            hideRestoreInput();
-        } else {
-            alert('Invalid mnemonic: ' + data.error);
-        }
-    } catch (err) {
-        alert('Failed to restore: ' + err.message);
+    const res = await window.electronAPI.restoreIdentity(words.join(' '));
+    if (res.success) {
+        currentMnemonic = res.mnemonic;
+        currentOnion = res.onionAddress;
+        displayIdentity(res.words, res.onionAddress);
+        hideRestoreInput();
+    } else {
+        alert('Invalid mnemonic: ' + res.error);
     }
 }
 
 function displayIdentity(words, onionAddress) {
-    // Show word grid
     const grid = document.getElementById('wordGrid');
     grid.innerHTML = '';
     words.forEach((word, i) => {
@@ -126,63 +108,96 @@ function displayIdentity(words, onionAddress) {
         grid.appendChild(chip);
     });
 
-    // Show onion address
     document.getElementById('onionText').textContent = onionAddress;
-
-    // Show display, show scanner card
     document.getElementById('wordDisplay').classList.remove('hidden');
-    document.getElementById('scannerCard').classList.remove('hidden');
-
-    setStatus('offline', 'Identity loaded — Ready to start scanner');
+    document.getElementById('roleTabs').classList.remove('hidden');
+    
+    switchRole('scanner');
+    setStatus('offline', 'Identity loaded — Ready');
 }
 
-// ─── Scanner ─────────────────────────────────────────────────
+// ─── Roles ───────────────────────────────────────────────────
+
+function switchRole(role) {
+    currentRole = role;
+    
+    // Update tab styles
+    const tabS = document.getElementById('tabScanner');
+    const tabB = document.getElementById('tabBeacon');
+    
+    if (role === 'scanner') {
+        tabS.style.borderColor = 'var(--accent-purple)';
+        tabS.style.background = 'rgba(124, 58, 237, 0.1)';
+        tabB.style.borderColor = 'var(--border)';
+        tabB.style.background = 'transparent';
+        
+        document.getElementById('scannerCard').classList.remove('hidden');
+        document.getElementById('beaconCard').classList.add('hidden');
+    } else {
+        tabB.style.borderColor = 'var(--accent-purple)';
+        tabB.style.background = 'rgba(124, 58, 237, 0.1)';
+        tabS.style.borderColor = 'var(--border)';
+        tabS.style.background = 'transparent';
+        
+        document.getElementById('beaconCard').classList.remove('hidden');
+        document.getElementById('scannerCard').classList.add('hidden');
+    }
+}
 
 async function startScanner() {
-    if (!currentMnemonic) {
-        alert('Generate or restore an identity first.');
-        return;
-    }
+    if (!currentMnemonic) return;
 
-    document.getElementById('btnStartScanner').disabled = true;
-    document.getElementById('scannerRunning').classList.remove('hidden');
+    document.getElementById('scannerCard').classList.add('hidden');
+    document.getElementById('roleTabs').classList.add('hidden');
+    document.getElementById('runningCard').classList.remove('hidden');
+    document.getElementById('systemLog').innerHTML = '';
+    
     setStatus('connecting', 'Starting Tor hidden service...');
     addLog('Initializing scanner...', 'info');
 
-    try {
-        const res = await fetch('/api/start-scanner', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ mnemonic: currentMnemonic })
-        });
-        const data = await res.json();
-
-        if (data.success) {
-            addLog(`Tor binary: ${data.torBinary}`, 'info');
-            addLog(`Target address: ${data.onionAddress}`, 'info');
-            addLog(data.message, 'info');
-        } else {
-            addLog(`Error: ${data.error}`, 'error');
-            setStatus('offline', 'Failed to start');
-            document.getElementById('btnStartScanner').disabled = false;
-        }
-    } catch (err) {
-        addLog(`Error: ${err.message}`, 'error');
+    const res = await window.electronAPI.startScanner(currentMnemonic);
+    if (!res.success) {
+        addLog(`Error: ${res.error}`, 'error');
         setStatus('offline', 'Failed to start');
-        document.getElementById('btnStartScanner').disabled = false;
+    } else {
+        addLog(res.message, 'info');
+        if (res.torBinary) addLog(`Tor binary: ${res.torBinary}`, 'info');
+    }
+}
+
+async function startBeacon() {
+    const target = document.getElementById('targetAddress').value.trim();
+    if (!target) return alert('Enter a .onion address');
+
+    document.getElementById('beaconCard').classList.add('hidden');
+    document.getElementById('roleTabs').classList.add('hidden');
+    document.getElementById('runningCard').classList.remove('hidden');
+    document.getElementById('systemLog').innerHTML = '';
+    
+    setStatus('connecting', 'Starting Tor SOCKS client...');
+    addLog('Initializing beacon...', 'info');
+    addLog(`Target: ${target}`, 'info');
+
+    const res = await window.electronAPI.startBeacon(target);
+    if (!res.success) {
+        addLog(`Error: ${res.error}`, 'error');
+        setStatus('offline', 'Failed to start');
+    } else {
+        addLog(res.message, 'info');
     }
 }
 
 async function stopSession() {
-    try {
-        await fetch('/api/stop', { method: 'POST' });
-        setStatus('offline', 'Session stopped');
-        document.getElementById('scannerRunning').classList.add('hidden');
-        document.getElementById('chatCard').classList.add('hidden');
-        document.getElementById('btnStartScanner').disabled = false;
-        document.getElementById('scannerLog').innerHTML = '';
-    } catch (err) {
-        console.error('Failed to stop:', err);
+    await window.electronAPI.stopSession();
+    setStatus('offline', 'Session stopped');
+    
+    document.getElementById('runningCard').classList.add('hidden');
+    document.getElementById('chatCard').classList.add('hidden');
+    document.getElementById('chatMessages').innerHTML = '';
+    
+    if (currentMnemonic) {
+        document.getElementById('roleTabs').classList.remove('hidden');
+        switchRole(currentRole);
     }
 }
 
@@ -191,10 +206,9 @@ async function stopSession() {
 function sendMessage() {
     const input = document.getElementById('chatInput');
     const text = input.value.trim();
-    if (!text || !ws) return;
+    if (!text) return;
 
-    ws.send(JSON.stringify({ type: 'message', text }));
-    addChatMessage(text, 'self');
+    window.electronAPI.sendChatMessage(text);
     input.value = '';
 }
 
@@ -228,7 +242,7 @@ function updateProgress(percent) {
 }
 
 function addLog(text, type = '') {
-    const log = document.getElementById('scannerLog');
+    const log = document.getElementById('systemLog');
     const entry = document.createElement('div');
     entry.className = `log__entry${type ? ` log__entry--${type}` : ''}`;
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -252,7 +266,3 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
-
-// ─── Init ────────────────────────────────────────────────────
-
-connectWebSocket();

@@ -1,352 +1,307 @@
-/**
- * OCTO Protocol — Main Entry Point (MVP)
- * 
- * Starts a local dashboard on http://localhost:3000
- * Provides API for:
- *   - Generating / restoring BIP-39 identity
- *   - Starting Scanner mode (Tor hidden service + simple web page)
- *   - Stopping the session
- * 
- * For MVP: User accesses the .onion site via Tor Browser
- */
-
+const { app, BrowserWindow, ipcMain } = require('electron');
+const path = require('path');
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
-const path = require('path');
+const { SocksProxyAgent } = require('socks-proxy-agent');
 const identity = require('./identity');
 const TorManager = require('./tor-manager');
 
-const DASHBOARD_PORT = 3000;
 const HIDDEN_SERVICE_LOCAL_PORT = 3001;
 
-// ─── Express Apps ───────────────────────────────────────────────────
-
-// Dashboard app (local only)
-const dashboardApp = express();
-dashboardApp.use(express.json());
-dashboardApp.use(express.static(path.join(__dirname, '..', 'public')));
-
-// Hidden service app (served on .onion)
-const hiddenServiceApp = express();
-hiddenServiceApp.use(express.static(path.join(__dirname, '..', 'public', 'onion-site')));
+let mainWindow;
 
 // ─── State ──────────────────────────────────────────────────────────
 
 let currentState = {
-    mode: null,             // 'scanner' | null
+    mode: null,             // 'scanner' | 'beacon' | null
     mnemonic: null,
     onionAddress: null,
+    targetAddress: null,
     torManager: null,
     hiddenServiceServer: null,
+    beaconWs: null,
     chatMessages: [],       // Ephemeral in-memory messages
-    wsClients: new Set()    // Connected WebSocket clients
+    wsClients: new Set()    // Connected WebSocket clients (for Scanner)
 };
 
-// ─── Dashboard API ──────────────────────────────────────────────────
+// ─── Electron Window ────────────────────────────────────────────────
 
-// Generate new identity
-dashboardApp.post('/api/generate', (req, res) => {
+function createWindow() {
+    mainWindow = new BrowserWindow({
+        width: 800,
+        height: 800,
+        minWidth: 500,
+        minHeight: 600,
+        backgroundColor: '#06060a',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false
+        },
+        autoHideMenuBar: true
+    });
+
+    mainWindow.loadFile(path.join(__dirname, '..', 'public', 'index.html'));
+}
+
+app.whenReady().then(() => {
+    createWindow();
+
+    app.on('activate', function () {
+        if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+});
+
+app.on('window-all-closed', function () {
+    if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', () => {
+    stopSession();
+});
+
+// Helper to broadcast to the UI
+function sendToUI(channel, data) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(channel, data);
+    }
+}
+
+// ─── IPC Handlers ───────────────────────────────────────────────────
+
+ipcMain.handle('generate-identity', () => {
     try {
         const mnemonic = identity.generateMnemonic();
         const onionAddress = identity.mnemonicToOnion(mnemonic);
         const words = mnemonic.split(' ');
-        res.json({ success: true, mnemonic, words, onionAddress });
+        return { success: true, mnemonic, words, onionAddress };
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        return { success: false, error: err.message };
     }
 });
 
-// Restore identity from mnemonic
-dashboardApp.post('/api/restore', (req, res) => {
+ipcMain.handle('restore-identity', (_event, mnemonic) => {
     try {
-        const { mnemonic } = req.body;
         if (!mnemonic || !identity.validateMnemonic(mnemonic)) {
-            return res.status(400).json({ success: false, error: 'Invalid BIP-39 mnemonic' });
+            return { success: false, error: 'Invalid BIP-39 mnemonic' };
         }
         const onionAddress = identity.mnemonicToOnion(mnemonic);
         const words = mnemonic.split(' ');
-        res.json({ success: true, mnemonic, words, onionAddress });
+        return { success: true, mnemonic, words, onionAddress };
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        return { success: false, error: err.message };
     }
 });
 
-// Start Scanner mode
-dashboardApp.post('/api/start-scanner', async (req, res) => {
+ipcMain.handle('start-scanner', async (_event, mnemonic) => {
     try {
-        const { mnemonic } = req.body;
         if (!mnemonic || !identity.validateMnemonic(mnemonic)) {
-            return res.status(400).json({ success: false, error: 'Invalid mnemonic' });
+            return { success: false, error: 'Invalid mnemonic' };
         }
-
-        // Don't restart if already running
         if (currentState.mode === 'scanner') {
-            return res.json({
-                success: true,
-                message: 'Scanner already running',
-                onionAddress: currentState.onionAddress
-            });
+            return { success: true, message: 'Scanner already running' };
         }
 
-        console.log('\n═══════════════════════════════════════════');
-        console.log('  STARTING SCANNER MODE');
-        console.log('═══════════════════════════════════════════\n');
+        stopSession();
 
-        // Setup directories
         const dataDir = path.join(__dirname, '..', 'data');
         const hiddenServiceDir = path.join(dataDir, 'hidden_service');
-
-        // Write Tor key files from mnemonic
         const onionAddress = identity.writeTorKeys(hiddenServiceDir, mnemonic);
-        console.log(`[scanner] .onion address: ${onionAddress}`);
 
-        // Start the hidden service web server
+        // Start hidden service server
+        const hiddenServiceApp = express();
+        hiddenServiceApp.use(express.static(path.join(__dirname, '..', 'public', 'onion-site')));
         const hsServer = http.createServer(hiddenServiceApp);
-        
-        // Setup WebSocket on hidden service for chat
         const wss = new WebSocket.Server({ server: hsServer });
-        setupChatWebSocket(wss);
+        setupScannerWebSocket(wss);
 
-        await new Promise((resolve) => {
-            hsServer.listen(HIDDEN_SERVICE_LOCAL_PORT, '127.0.0.1', () => {
-                console.log(`[scanner] Hidden service server on 127.0.0.1:${HIDDEN_SERVICE_LOCAL_PORT}`);
-                resolve();
-            });
-        });
+        await new Promise((resolve) => hsServer.listen(HIDDEN_SERVICE_LOCAL_PORT, '127.0.0.1', resolve));
 
-        // Start Tor with hidden service
+        // Start Tor
         const torManager = new TorManager(dataDir);
         const torBinary = torManager.findTorBinary();
-        if (!torBinary) {
-            hsServer.close();
-            return res.status(500).json({
-                success: false,
-                error: 'Tor binary not found. Install Tor or place tor.exe in the project tor/ directory.'
-            });
-        }
+        if (!torBinary) throw new Error('Tor binary not found.');
 
-        const torrcPath = torManager.writeScannerConfig(
-            hiddenServiceDir,
-            80,
-            HIDDEN_SERVICE_LOCAL_PORT
-        );
+        const torrcPath = torManager.writeScannerConfig(hiddenServiceDir, 80, HIDDEN_SERVICE_LOCAL_PORT);
 
-        // Send initial response - Tor bootstrap happens async
-        res.json({
-            success: true,
-            message: 'Starting Tor... This may take 30-60 seconds.',
-            onionAddress,
-            torBinary
-        });
+        torManager.on('bootstrap', (progress) => sendToUI('tor-bootstrap', progress));
 
-        // Bootstrap Tor (async)
-        torManager.on('bootstrap', (progress) => {
-            broadcastToDashboard({
-                type: 'tor-bootstrap',
-                progress
-            });
-        });
-
-        try {
-            await torManager.start(torrcPath);
-            console.log('\n═══════════════════════════════════════════');
-            console.log('  ✓ SCANNER IS LIVE');
-            console.log(`  Address: ${onionAddress}`);
-            console.log('  Open this in Tor Browser to access the site');
-            console.log('═══════════════════════════════════════════\n');
-
+        torManager.start(torrcPath).then(() => {
             currentState.mode = 'scanner';
             currentState.mnemonic = mnemonic;
             currentState.onionAddress = onionAddress;
             currentState.torManager = torManager;
             currentState.hiddenServiceServer = hsServer;
-
-            broadcastToDashboard({
-                type: 'scanner-ready',
-                onionAddress
-            });
-        } catch (err) {
-            console.error(`[scanner] Tor failed: ${err.message}`);
+            sendToUI('scanner-ready', { onionAddress, torBinary });
+        }).catch((err) => {
             hsServer.close();
-            broadcastToDashboard({
-                type: 'scanner-error',
-                error: err.message
-            });
-        }
+            sendToUI('scanner-error', err.message);
+        });
 
+        return { success: true, message: 'Starting Tor...', onionAddress, torBinary };
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        return { success: false, error: err.message };
     }
 });
 
-// Stop current session
-dashboardApp.post('/api/stop', (req, res) => {
-    stopSession();
-    res.json({ success: true, message: 'Session stopped' });
-});
+ipcMain.handle('start-beacon', async (_event, targetAddress) => {
+    try {
+        if (!targetAddress || !targetAddress.endsWith('.onion')) {
+            return { success: false, error: 'Invalid .onion address' };
+        }
 
-// Get current status
-dashboardApp.get('/api/status', (req, res) => {
-    res.json({
-        mode: currentState.mode,
-        onionAddress: currentState.onionAddress,
-        torStatus: currentState.torManager ? currentState.torManager.getStatus() : null
-    });
-});
+        stopSession();
 
-// ─── Chat WebSocket (on hidden service) ─────────────────────────────
+        const dataDir = path.join(__dirname, '..', 'data');
+        const torManager = new TorManager(dataDir);
+        const torBinary = torManager.findTorBinary();
+        if (!torBinary) throw new Error('Tor binary not found.');
 
-function setupChatWebSocket(wss) {
-    wss.on('connection', (ws) => {
-        console.log('[chat] New peer connected via .onion');
-        currentState.wsClients.add(ws);
+        const torrcPath = torManager.writeBeaconConfig(9050);
 
-        // Send chat history
-        ws.send(JSON.stringify({
-            type: 'history',
-            messages: currentState.chatMessages
-        }));
+        torManager.on('bootstrap', (progress) => sendToUI('tor-bootstrap', progress));
 
-        // Broadcast to dashboard that someone connected
-        broadcastToDashboard({
-            type: 'peer-connected',
-            count: currentState.wsClients.size
+        torManager.start(torrcPath).then(() => {
+            currentState.mode = 'beacon';
+            currentState.targetAddress = targetAddress;
+            currentState.torManager = torManager;
+            
+            // Connect to target via SOCKS5
+            connectBeaconWebSocket(targetAddress);
+            
+            sendToUI('beacon-ready', { targetAddress, torBinary });
+        }).catch((err) => {
+            sendToUI('beacon-error', err.message);
         });
+
+        return { success: true, message: 'Starting Tor Client...', torBinary };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+});
+
+ipcMain.handle('stop-session', () => {
+    stopSession();
+    return { success: true };
+});
+
+ipcMain.on('send-chat-message', (_event, text) => {
+    const chatMsg = { text, from: 'self', timestamp: Date.now() };
+    currentState.chatMessages.push(chatMsg);
+
+    if (currentState.mode === 'scanner') {
+        // Broadcast to all connected peers
+        for (const client of currentState.wsClients) {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({ type: 'message', text, from: 'scanner', timestamp: chatMsg.timestamp }));
+            }
+        }
+    } else if (currentState.mode === 'beacon') {
+        // Send to scanner
+        if (currentState.beaconWs && currentState.beaconWs.readyState === WebSocket.OPEN) {
+            currentState.beaconWs.send(JSON.stringify({ type: 'message', text, from: 'beacon', timestamp: chatMsg.timestamp }));
+        }
+    }
+});
+
+// ─── Scanner Chat Logic ──────────────────────────────────────────────
+
+function setupScannerWebSocket(wss) {
+    wss.on('connection', (ws) => {
+        currentState.wsClients.add(ws);
+        sendToUI('peer-connected', currentState.wsClients.size);
+        ws.send(JSON.stringify({ type: 'history', messages: currentState.chatMessages }));
 
         ws.on('message', (data) => {
             try {
                 const msg = JSON.parse(data.toString());
                 if (msg.type === 'message') {
-                    const chatMsg = {
-                        text: msg.text,
-                        from: 'peer',
-                        timestamp: Date.now()
-                    };
+                    const chatMsg = { text: msg.text, from: 'peer', timestamp: Date.now() };
                     currentState.chatMessages.push(chatMsg);
-
-                    // Broadcast to all connected clients
+                    
+                    // Broadcast to other peers
                     for (const client of currentState.wsClients) {
                         if (client !== ws && client.readyState === WebSocket.OPEN) {
-                            client.send(JSON.stringify({ type: 'message', ...chatMsg }));
+                            client.send(JSON.stringify({ type: 'message', text: msg.text, from: 'peer', timestamp: chatMsg.timestamp }));
                         }
                     }
-
-                    // Also forward to dashboard
-                    broadcastToDashboard({ type: 'chat-message', ...chatMsg });
+                    sendToUI('chat-message', chatMsg);
                 }
-            } catch (err) {
-                console.error('[chat] Bad message:', err.message);
-            }
+            } catch (e) {}
         });
 
         ws.on('close', () => {
             currentState.wsClients.delete(ws);
-            console.log('[chat] Peer disconnected');
-            broadcastToDashboard({
-                type: 'peer-disconnected',
-                count: currentState.wsClients.size
-            });
+            sendToUI('peer-disconnected', currentState.wsClients.size);
         });
     });
 }
 
-// ─── Dashboard WebSocket ────────────────────────────────────────────
+// ─── Beacon Chat Logic ───────────────────────────────────────────────
 
-const dashboardServer = http.createServer(dashboardApp);
-const dashboardWss = new WebSocket.Server({ server: dashboardServer });
-const dashboardClients = new Set();
+function connectBeaconWebSocket(onionAddress) {
+    const proxy = 'socks5h://127.0.0.1:9050';
+    const agent = new SocksProxyAgent(proxy);
+    
+    // Connect to ws://[onionAddress]
+    // The hidden service is on port 80, so ws:// works.
+    const wsUrl = `ws://${onionAddress}/`;
+    
+    sendToUI('chat-message', { text: 'Connecting to ' + onionAddress + '...', from: 'peer' });
 
-dashboardWss.on('connection', (ws) => {
-    dashboardClients.add(ws);
+    currentState.beaconWs = new WebSocket(wsUrl, { agent });
 
-    // Send chat message from dashboard to .onion clients
-    ws.on('message', (data) => {
+    currentState.beaconWs.on('open', () => {
+        sendToUI('peer-connected', 1);
+        sendToUI('chat-message', { text: 'Connected securely via Tor.', from: 'peer' });
+    });
+
+    currentState.beaconWs.on('message', (data) => {
         try {
             const msg = JSON.parse(data.toString());
-            if (msg.type === 'message') {
-                const chatMsg = {
-                    text: msg.text,
-                    from: 'scanner',
-                    timestamp: Date.now()
-                };
+            if (msg.type === 'history') {
+                currentState.chatMessages = msg.messages.map(m => ({
+                    text: m.text,
+                    from: m.from === 'scanner' ? 'peer' : 'self',
+                    timestamp: m.timestamp
+                }));
+                sendToUI('chat-history', currentState.chatMessages);
+            } else if (msg.type === 'message') {
+                const chatMsg = { text: msg.text, from: 'peer', timestamp: msg.timestamp || Date.now() };
                 currentState.chatMessages.push(chatMsg);
-
-                // Broadcast to all .onion connected clients
-                for (const client of currentState.wsClients) {
-                    if (client.readyState === WebSocket.OPEN) {
-                        client.send(JSON.stringify({ type: 'message', ...chatMsg }));
-                    }
-                }
+                sendToUI('chat-message', chatMsg);
             }
-        } catch (err) {
-            console.error('[dashboard-ws] Bad message:', err.message);
-        }
+        } catch (e) {}
     });
 
-    ws.on('close', () => {
-        dashboardClients.delete(ws);
+    currentState.beaconWs.on('close', () => {
+        sendToUI('peer-disconnected', 0);
+        sendToUI('chat-message', { text: 'Disconnected from peer.', from: 'peer' });
     });
-});
-
-function broadcastToDashboard(msg) {
-    const data = JSON.stringify(msg);
-    for (const client of dashboardClients) {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(data);
-        }
-    }
+    
+    currentState.beaconWs.on('error', (err) => {
+        sendToUI('beacon-error', 'WebSocket Error: ' + err.message);
+    });
 }
 
-// ─── Session Management ─────────────────────────────────────────────
+// ─── Cleanup ────────────────────────────────────────────────────────
 
 function stopSession() {
-    if (currentState.torManager) {
-        currentState.torManager.stop();
-    }
-    if (currentState.hiddenServiceServer) {
-        currentState.hiddenServiceServer.close();
-    }
-    // Close all WebSocket connections
-    for (const client of currentState.wsClients) {
-        client.close();
-    }
+    if (currentState.torManager) currentState.torManager.stop();
+    if (currentState.hiddenServiceServer) currentState.hiddenServiceServer.close();
+    if (currentState.beaconWs) currentState.beaconWs.close();
+    for (const client of currentState.wsClients) client.close();
+    
     currentState = {
         mode: null,
         mnemonic: null,
         onionAddress: null,
+        targetAddress: null,
         torManager: null,
         hiddenServiceServer: null,
+        beaconWs: null,
         chatMessages: [],
         wsClients: new Set()
     };
-    console.log('[main] Session stopped');
 }
-
-// ─── Graceful Shutdown ──────────────────────────────────────────────
-
-process.on('SIGINT', () => {
-    console.log('\n[main] Shutting down...');
-    stopSession();
-    dashboardServer.close();
-    process.exit(0);
-});
-
-process.on('SIGTERM', () => {
-    stopSession();
-    dashboardServer.close();
-    process.exit(0);
-});
-
-// ─── Start ──────────────────────────────────────────────────────────
-
-dashboardServer.listen(DASHBOARD_PORT, () => {
-    console.log('\n═══════════════════════════════════════════');
-    console.log('  OCTO PROTOCOL — MVP');
-    console.log('═══════════════════════════════════════════');
-    console.log(`  Dashboard:  http://localhost:${DASHBOARD_PORT}`);
-    console.log('  1. Generate or restore your 24-word identity');
-    console.log('  2. Start Scanner to host your .onion site');
-    console.log('  3. Open the .onion address in Tor Browser');
-    console.log('═══════════════════════════════════════════\n');
-});

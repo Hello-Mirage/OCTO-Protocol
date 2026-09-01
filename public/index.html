@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OCTO Protocol — Dashboard</title>
+    <title>OCTO Protocol — Desktop</title>
     <meta name="description" content="Serverless P2P encrypted chat over Tor hidden services">
-    <link rel="stylesheet" href="/css/styles.css">
+    <link rel="stylesheet" href="./css/styles.css">
 </head>
 <body>
     <div class="container">
@@ -26,7 +26,6 @@
         <section class="card" id="identityCard">
             <h2 class="card__title">Identity</h2>
 
-            <!-- Generate / Restore buttons -->
             <div id="identityActions">
                 <div class="btn-group">
                     <button class="btn btn--primary" id="btnGenerate" onclick="generateIdentity()">
@@ -37,7 +36,6 @@
                     </button>
                 </div>
 
-                <!-- Restore input (hidden by default) -->
                 <div id="restoreSection" class="hidden" style="margin-top: 0.75rem;">
                     <textarea class="textarea" id="restoreInput" 
                         placeholder="Paste your 24 words here, separated by spaces..."></textarea>
@@ -48,50 +46,70 @@
                 </div>
             </div>
 
-            <!-- Word display (hidden until generated) -->
             <div id="wordDisplay" class="hidden">
                 <div class="word-grid" id="wordGrid"></div>
                 <div class="onion-address" id="onionDisplay" onclick="copyOnion()">
-                    <span class="onion-address__label">Your .onion Address</span>
+                    <span class="onion-address__label">Your .onion Address (Scanner Mode)</span>
                     <span id="onionText"></span>
                 </div>
             </div>
         </section>
 
-        <!-- Scanner Card (hidden until identity exists) -->
-        <section class="card hidden" id="scannerCard">
-            <h2 class="card__title">Scanner — Host Hidden Service</h2>
+        <!-- Role Selection Tabs (Hidden until identity loaded) -->
+        <div id="roleTabs" class="hidden" style="display: flex; gap: 1rem; margin-bottom: 1.25rem;">
+            <button class="btn btn--secondary btn--full" id="tabScanner" onclick="switchRole('scanner')" style="border-color: var(--accent-purple); background: rgba(124, 58, 237, 0.1);">🛰️ Scanner Mode</button>
+            <button class="btn btn--secondary btn--full" id="tabBeacon" onclick="switchRole('beacon')">📡 Beacon Mode</button>
+        </div>
 
+        <!-- Scanner Card -->
+        <section class="card hidden" id="scannerCard">
+            <h2 class="card__title">Scanner — Host Chat Server</h2>
             <div id="scannerActions">
                 <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
-                    Start the scanner to host your chat server as a Tor hidden service. 
-                    Others can reach you at your .onion address using Tor Browser.
+                    Host your chat server as a Tor hidden service. Wait for a beacon to connect to your .onion address.
                 </p>
                 <button class="btn btn--primary btn--full" id="btnStartScanner" onclick="startScanner()">
                     🛰️ Start Scanner
                 </button>
             </div>
+        </section>
 
-            <div id="scannerRunning" class="hidden">
-                <div class="progress">
-                    <div class="progress__bar" id="progressBar"></div>
-                </div>
-                <div class="log" id="scannerLog"></div>
-                <div style="margin-top: 0.75rem;">
-                    <button class="btn btn--danger btn--full" onclick="stopSession()">
-                        ■ Stop Scanner
-                    </button>
-                </div>
+        <!-- Beacon Card -->
+        <section class="card hidden" id="beaconCard">
+            <h2 class="card__title">Beacon — Connect to Peer</h2>
+            <div id="beaconActions">
+                <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
+                    Enter the .onion address of the scanner you want to connect to.
+                </p>
+                <input class="input" id="targetAddress" type="text" placeholder="e.g. xxxxxxx.onion" style="margin-bottom: 0.75rem;">
+                <button class="btn btn--primary btn--full" id="btnStartBeacon" onclick="startBeacon()">
+                    📡 Connect to Peer
+                </button>
             </div>
         </section>
 
-        <!-- Chat Card (hidden until scanner is live) -->
+        <!-- Running State Log (Scanner or Beacon) -->
+        <section class="card hidden" id="runningCard">
+            <h2 class="card__title">Tor Status</h2>
+            <div class="progress">
+                <div class="progress__bar" id="progressBar"></div>
+            </div>
+            <div class="log" id="systemLog"></div>
+            <div style="margin-top: 0.75rem;">
+                <button class="btn btn--danger btn--full" onclick="stopSession()">
+                    ■ Stop Session
+                </button>
+            </div>
+        </section>
+
+        <!-- Chat Card -->
         <section class="card hidden" id="chatCard">
-            <h2 class="card__title">Chat — Local Console</h2>
-            <div id="chatMessages" style="max-height: 200px; overflow-y: auto; margin-bottom: 0.75rem;"></div>
+            <h2 class="card__title">Secure Chat</h2>
+            <div id="chatMessages" style="height: 250px; overflow-y: auto; margin-bottom: 0.75rem; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.5rem; background: rgba(0,0,0,0.2);"></div>
             <div style="display: flex; gap: 0.5rem;">
                 <input class="input" id="chatInput" type="text" 
                     placeholder="Type a message..." 
+                    autocomplete="off"
                     onkeydown="if(event.key==='Enter') sendMessage()">
                 <button class="btn btn--primary" onclick="sendMessage()">Send</button>
             </div>
@@ -102,6 +120,6 @@
     <!-- Copy Feedback Toast -->
     <div class="copy-feedback" id="copyFeedback">Copied to clipboard!</div>
 
-    <script src="/js/dashboard.js"></script>
+    <script src="./js/dashboard.js"></script>
 </body>
 </html>
