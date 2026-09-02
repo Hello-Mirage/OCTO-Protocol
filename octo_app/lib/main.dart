@@ -517,15 +517,25 @@ class _DashboardViewState extends State<DashboardView> {
               child: Column(
                 children: [
                   Expanded(
-                    child: ListView.builder(
-                      padding: const EdgeInsets.all(20),
-                      itemCount: _chatLines.length,
-                      itemBuilder: (context, index) {
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 4),
-                          child: SelectableText(_chatLines[index], style: const TextStyle(fontSize: 14)),
-                        );
-                      },
+                    child: Stack(
+                      children: [
+                        Center(
+                          child: Opacity(
+                            opacity: 0.05,
+                            child: Image.asset('assets/icon.png', width: 300, height: 300, filterQuality: FilterQuality.high),
+                          ),
+                        ),
+                        ListView.builder(
+                          padding: const EdgeInsets.all(20),
+                          itemCount: _chatLines.length,
+                          itemBuilder: (context, index) {
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              child: SelectableText(_chatLines[index], style: const TextStyle(fontSize: 14)),
+                            );
+                          },
+                        ),
+                      ],
                     ),
                   ),
                   Container(height: 1, color: Colors.white24),
