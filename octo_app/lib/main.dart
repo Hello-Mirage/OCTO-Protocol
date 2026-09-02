@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:window_manager/window_manager.dart';
 import 'core/identity.dart';
 import 'core/tor_manager.dart';
 import 'core/scanner.dart';
@@ -7,6 +8,14 @@ import 'core/beacon.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await windowManager.ensureInitialized();
+  WindowOptions windowOptions = const WindowOptions(
+    title: 'GHOST',
+  );
+  windowManager.waitUntilReadyToShow(windowOptions, () async {
+    await windowManager.show();
+    await windowManager.focus();
+  });
   runApp(const GhostApp());
 }
 
@@ -278,7 +287,7 @@ class DashboardView extends StatefulWidget {
   State<DashboardView> createState() => _DashboardViewState();
 }
 
-class _DashboardViewState extends State<DashboardView> {
+class _DashboardViewState extends State<DashboardView> with WindowListener {
   int _tabIndex = 0; // 0 = Scanner, 1 = Beacon
   late TorManager _torManager;
   ScannerMode? _scanner;
@@ -298,8 +307,11 @@ class _DashboardViewState extends State<DashboardView> {
   @override
   void initState() {
     super.initState();
+    windowManager.addListener(this);
+    windowManager.setPreventClose(true);
     _torManager = TorManager('${Directory.current.path}/data');
     _torManager.onBootstrap.listen((progress) {
+      if (!mounted) return;
       setState(() => _bootstrapProgress = progress);
       if (progress == 100) {
         setState(() => _torRunning = true);
@@ -309,10 +321,20 @@ class _DashboardViewState extends State<DashboardView> {
 
   @override
   void dispose() {
+    windowManager.removeListener(this);
     _torManager.stop();
     _scanner?.stop();
     _beacon?.disconnect();
     super.dispose();
+  }
+
+  @override
+  void onWindowClose() async {
+    // Graceful shutdown before closing
+    await _torManager.stop();
+    await _scanner?.stop();
+    await _beacon?.disconnect();
+    await windowManager.destroy();
   }
 
   void _addChatLine(String line) {
