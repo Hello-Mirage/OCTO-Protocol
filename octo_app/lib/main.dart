@@ -367,6 +367,7 @@ class _DashboardViewState extends State<DashboardView> with WindowListener {
 
     _addChatLine('[SYS] HOSTING APP SERVER ON TOR...');
     final hsDir = '${Directory.current.path}/data/hidden_service';
+    await widget.identity.writeTorKeys(hsDir);
     final torrc = await _torManager.writeScannerConfig(hsDir, 80, 3005);
     await _torManager.start(torrc);
   }
