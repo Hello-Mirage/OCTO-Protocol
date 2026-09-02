@@ -33,6 +33,7 @@ class Socks5Forwarder {
 
       int state = 0;
       final buffer = <int>[];
+      final localBuffer = <int>[];
 
       socksSocket.listen((data) {
         if (state == 2) {
@@ -81,6 +82,10 @@ class Socks5Forwarder {
             if (leftover.isNotEmpty) {
               localSocket.add(leftover);
             }
+            if (localBuffer.isNotEmpty) {
+              socksSocket.add(localBuffer);
+              localBuffer.clear();
+            }
           }
         }
       }, onDone: () {
@@ -90,7 +95,11 @@ class Socks5Forwarder {
       });
 
       localSocket.listen((data) {
-        socksSocket.add(data);
+        if (state == 2) {
+          socksSocket.add(data);
+        } else {
+          localBuffer.addAll(data);
+        }
       }, onDone: () {
         socksSocket.destroy();
       }, onError: (e) {
