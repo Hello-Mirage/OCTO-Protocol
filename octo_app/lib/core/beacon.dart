@@ -1,35 +1,43 @@
 import 'dart:io';
 import 'package:web_socket_channel/io.dart';
+import 'socks_forwarder.dart';
 
 class BeaconMode {
-  final int torHttpProxyPort;
+  final int torSocksPort;
   final Function(String message, String from) onMessageReceived;
   final Function(bool isConnected) onConnectionStatusChanged;
 
   IOWebSocketChannel? _channel;
+  Socks5Forwarder? _forwarder;
 
   BeaconMode({
-    required this.torHttpProxyPort,
+    required this.torSocksPort,
     required this.onMessageReceived,
     required this.onConnectionStatusChanged,
   });
 
-  /// Connects to the Scanner via Tor HTTP Proxy.
+  /// Connects to the Scanner via Tor SOCKS5 Proxy.
   Future<void> connect(String onionAddress) async {
     if (!onionAddress.endsWith('.onion')) {
       throw Exception('Invalid .onion address');
     }
 
     try {
-      final client = HttpClient();
-      client.findProxy = (uri) {
-        return 'PROXY 127.0.0.1:$torHttpProxyPort';
-      };
+      // Pick a random local port
+      final localPort = 30000 + (DateTime.now().millisecondsSinceEpoch % 10000);
+      
+      _forwarder = Socks5Forwarder(
+        localPort: localPort,
+        socksPort: torSocksPort,
+        targetHost: onionAddress,
+        targetPort: 80, // Tor Hidden Service port
+      );
+      await _forwarder!.start();
 
-      // Ensure the HTTP Client doesn't timeout indefinitely
-      client.connectionTimeout = const Duration(seconds: 30);
+      // Wait a moment for the forwarder to be ready
+      await Future.delayed(const Duration(milliseconds: 500));
 
-      final ws = await WebSocket.connect('ws://$onionAddress', customClient: client);
+      final ws = await WebSocket.connect('ws://127.0.0.1:$localPort');
       _channel = IOWebSocketChannel(ws);
       
       onConnectionStatusChanged(true);
@@ -40,16 +48,18 @@ class BeaconMode {
         },
         onDone: () {
           onConnectionStatusChanged(false);
-          _channel = null;
+          _cleanup();
         },
         onError: (err) {
           print('[Beacon] WebSocket error: $err');
           onConnectionStatusChanged(false);
+          _cleanup();
         }
       );
     } catch (e) {
       print('[Beacon] Connect error: $e');
       onConnectionStatusChanged(false);
+      await _cleanup();
       throw e;
     }
   }
@@ -62,10 +72,16 @@ class BeaconMode {
     }
   }
 
-  /// Disconnects from the Scanner.
-  Future<void> disconnect() async {
+  Future<void> _cleanup() async {
     await _channel?.sink.close();
     _channel = null;
+    await _forwarder?.stop();
+    _forwarder = null;
+  }
+
+  /// Disconnects from the Scanner.
+  Future<void> disconnect() async {
+    await _cleanup();
     onConnectionStatusChanged(false);
   }
 }

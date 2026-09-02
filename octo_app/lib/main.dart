@@ -426,11 +426,12 @@ class _DashboardViewState extends State<DashboardView> with WindowListener {
 
     _addChatLine('[SYS] PINGING SERVER: $targetOnion');
     _beacon = BeaconMode(
-      torHttpProxyPort: 9051,
+      torSocksPort: 9050,
       onMessageReceived: (msg, from) {
         _addChatLine('[SCANNER] $msg');
       },
       onConnectionStatusChanged: (connected) {
+        if (!mounted) return;
         setState(() => _beaconConnected = connected);
         if (connected) {
           _addChatLine('[SYS] UPLINK ESTABLISHED.');
