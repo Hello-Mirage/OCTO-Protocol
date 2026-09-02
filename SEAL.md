@@ -74,8 +74,34 @@
 - ✅ Tor bootstraps successfully and hidden service comes online
 - ✅ .onion address is reachable via Tor Browser
 
+---
+
+### [2026-09-02] — MILESTONE 1: Native Windows Migration & Beacon Mode (GHOST)
+
+**Status**: ✅ COMPLETE — App migrated to Flutter Native with Full SOCKS5/HTTP Proxy Support
+
+**What was built**:
+
+1. **Dart Native Migration** (`octo_app`)
+   - Migrated entire Electron/Node.js stack to a pure compiled Dart/Flutter Windows native executable.
+   - Built an entirely new identity cryptography engine using `pointycastle`, implementing Ed25519 Tor expansion natively.
+
+2. **Beacon Mode (Target Targeting)** (`lib/core/beacon.dart`)
+   - Implemented Tor HTTP Tunneling natively using Dart `HttpClient` (`findProxy`).
+   - Enabled WebSocket over Tor HTTP Tunnel (`127.0.0.1:9051`) to route client traffic through the Tor network to hidden services.
+   - Allowed targeting an onion directly or generating the target onion from the peer's 24-word phrase via a shared-secret paradigm.
+
+3. **GHOST Identity Theme** (`lib/main.dart`)
+   - Completely redesigned the GUI into a pure black, minimalist cyberpunk/cybersec aesthetic.
+   - Implemented rigid corners, monospaced typography, and high-contrast components.
+   - Replaced complex nested navigation with a unified dual-pane Dashboard (Identity/Scanner vs Chat/Console).
+
+**Verification Results**:
+- ✅ Native Windows App compiles and runs without Node.js dependencies.
+- ✅ Tor HTTP Tunnel properly routes `shelf_web_socket` connections to .onion domains.
+- ✅ Mnemonic target generation securely derives matching Ed25519 Tor addresses.
+
 **What's NOT built yet (future phases)**:
-- [ ] Beacon mode (client connecting to scanner via Tor SOCKS5)
 - [ ] Time-window scheduling (predetermined communication windows)
 - [ ] Duress pin (panic/wipe mechanism under coercion)
 - [ ] Mobile/portable version
