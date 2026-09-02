@@ -26,61 +26,81 @@ class Socks5Forwarder {
     _connections.add(localSocket);
 
     try {
-      // Connect to Tor SOCKS5
       final socksSocket = await Socket.connect('127.0.0.1', socksPort);
       _connections.add(socksSocket);
 
-      // SOCKS5 Handshake - Greeting
-      socksSocket.add([0x05, 0x01, 0x00]); // Version 5, 1 auth method, NO AUTH
-      await _waitForBytes(socksSocket, 2);
+      socksSocket.add([0x05, 0x01, 0x00]); // Greeting
 
-      // SOCKS5 Request
-      final hostBytes = targetHost.codeUnits;
-      final req = <int>[
-        0x05, 0x01, 0x00, 0x03, // V5, CONNECT, RSV, DOMAINNAME
-        hostBytes.length,
-        ...hostBytes,
-        (targetPort >> 8) & 0xFF,
-        targetPort & 0xFF,
-      ];
-      socksSocket.add(req);
+      int state = 0;
+      final buffer = <int>[];
 
-      // Read response
-      final resp = await _waitForBytes(socksSocket, 10); // Standard response is 10 bytes usually
-      if (resp[1] != 0x00) {
-        throw Exception('SOCKS5 connect failed: ${resp[1]}');
-      }
+      socksSocket.listen((data) {
+        if (state == 2) {
+          localSocket.add(data);
+          return;
+        }
 
-      // Proxy traffic bidirectionally
-      localSocket.cast<List<int>>().listen(socksSocket.add, onDone: () {
-        socksSocket.destroy();
-      });
-      socksSocket.cast<List<int>>().listen(localSocket.add, onDone: () {
+        buffer.addAll(data);
+
+        if (state == 0 && buffer.length >= 2) {
+          if (buffer[1] != 0x00) {
+            print('SOCKS auth failed');
+            socksSocket.destroy();
+            return;
+          }
+          buffer.removeRange(0, 2);
+          state = 1;
+
+          final hostBytes = targetHost.codeUnits;
+          final req = <int>[
+            0x05, 0x01, 0x00, 0x03,
+            hostBytes.length,
+            ...hostBytes,
+            (targetPort >> 8) & 0xFF,
+            targetPort & 0xFF,
+          ];
+          socksSocket.add(req);
+        }
+
+        if (state == 1 && buffer.length >= 4) {
+          int atyp = buffer[3];
+          int respLen = 4;
+          if (atyp == 0x01) respLen += 4 + 2; // IPv4
+          else if (atyp == 0x03) respLen += 1 + buffer[4] + 2; // Domain
+          else if (atyp == 0x04) respLen += 16 + 2; // IPv6
+
+          if (buffer.length >= respLen) {
+            if (buffer[1] != 0x00) {
+              print('SOCKS connect failed: ${buffer[1]}');
+              socksSocket.destroy();
+              return;
+            }
+            final leftover = buffer.sublist(respLen);
+            state = 2; // Proxy mode active
+            
+            if (leftover.isNotEmpty) {
+              localSocket.add(leftover);
+            }
+          }
+        }
+      }, onDone: () {
         localSocket.destroy();
+      }, onError: (e) {
+        localSocket.destroy();
+      });
+
+      localSocket.listen((data) {
+        socksSocket.add(data);
+      }, onDone: () {
+        socksSocket.destroy();
+      }, onError: (e) {
+        socksSocket.destroy();
       });
 
     } catch (e) {
       print('Socks5Forwarder error: $e');
       localSocket.destroy();
     }
-  }
-
-  Future<List<int>> _waitForBytes(Socket socket, int count) async {
-    final completer = Completer<List<int>>();
-    final buffer = <int>[];
-    late StreamSubscription sub;
-    
-    sub = socket.listen((data) {
-      buffer.addAll(data);
-      if (buffer.length >= count) {
-        sub.cancel();
-        completer.complete(buffer);
-      }
-    }, onError: (e) {
-      completer.completeError(e);
-    });
-
-    return completer.future;
   }
 
   Future<void> stop() async {
