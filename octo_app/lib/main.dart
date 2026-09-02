@@ -377,11 +377,19 @@ class _DashboardViewState extends State<DashboardView> {
     final text = _msgController.text.trim();
     if (text.isEmpty) return;
 
-    if (_tabIndex == 0 && _scannerActive) {
+    if (_tabIndex == 0) {
+      if (!_scannerActive) {
+        _addChatLine('[SYS] ERR: START SCANNER BEFORE TRANSMITTING.');
+        return;
+      }
       _scanner?.broadcastMessage(text);
       _addChatLine('[YOU] $text');
       _msgController.clear();
-    } else if (_tabIndex == 1 && _beaconConnected) {
+    } else if (_tabIndex == 1) {
+      if (!_beaconConnected) {
+        _addChatLine('[SYS] ERR: ESTABLISH UPLINK BEFORE TRANSMITTING.');
+        return;
+      }
       _beacon?.sendMessage(text);
       _addChatLine('[YOU] $text');
       _msgController.clear();
@@ -535,7 +543,6 @@ class _DashboardViewState extends State<DashboardView> {
                               border: InputBorder.none,
                             ),
                             onSubmitted: (_) => _sendMessage(),
-                            enabled: (_tabIndex == 0 && _scannerActive) || (_tabIndex == 1 && _beaconConnected),
                           ),
                         ),
                         IconButton(
